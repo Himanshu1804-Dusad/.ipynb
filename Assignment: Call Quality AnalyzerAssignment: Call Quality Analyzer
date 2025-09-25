@@ -1,0 +1,87 @@
+# Call Quality Analyzer
+# Author: Himanshu Dusad
+# Requirements: Python3, Google Colab free tier
+
+!pip install openai-whisper pydub transformers torch librosa jiwer
+
+import torch, librosa, re
+import whisper
+from pydub import AudioSegment
+from transformers import pipeline
+from jiwer import wer
+
+# -------------------------------
+# STEP 1: Load and preprocess audio
+# -------------------------------
+# Download sample YouTube audio (provided test file)
+!yt-dlp -x --audio-format mp3 -o "call.mp3" https://www.youtube.com/watch?v=4ostqJD3Psc
+
+audio = "call.mp3"
+
+# -------------------------------
+# STEP 2: Transcribe audio (Whisper small for speed)
+# -------------------------------
+model = whisper.load_model("small")  # use "tiny" if Colab RAM is low
+result = model.transcribe(audio)
+transcript = result["text"]
+
+print("Transcript Sample:\n", transcript[:500])
+
+# -------------------------------
+# STEP 3: Speaker Diarization (identify speakers)
+# -------------------------------
+# Simplified: detect long pauses to segment speakers
+y, sr = librosa.load(audio, sr=16000)
+energy = librosa.feature.rms(y=y)[0]
+threshold = energy.mean() * 1.5
+segments = librosa.effects.split(y, top_db=30)
+
+# Mock: Alternate speakers (rep, customer)
+speaker_turns = []
+for i, (start, end) in enumerate(segments):
+    spk = "SalesRep" if i % 2 == 0 else "Customer"
+    speaker_turns.append((spk, start / sr, end / sr))
+
+# -------------------------------
+# STEP 4: Metrics
+# -------------------------------
+words = transcript.split()
+sales_words = sum(len(words)//2 for spk,_,_ in speaker_turns if spk=="SalesRep")
+cust_words = len(words) - sales_words
+talk_ratio = {
+    "SalesRep %": round((sales_words/len(words))*100, 2),
+    "Customer %": round((cust_words/len(words))*100, 2)
+}
+
+# Count questions
+questions = len(re.findall(r"\?", transcript))
+
+# Longest monologue
+durations = [end-start for _,start,end in speaker_turns]
+longest_monologue = round(max(durations), 2)
+
+# -------------------------------
+# STEP 5: Sentiment Analysis
+# -------------------------------
+sentiment_model = pipeline("sentiment-analysis")
+sentiment = sentiment_model(transcript[:512])[0]  # analyze first 512 chars
+
+# -------------------------------
+# STEP 6: Actionable Insight
+# -------------------------------
+if talk_ratio["SalesRep %"] > 70:
+    insight = "Sales rep dominated the call. Let customer speak more."
+elif questions < 3:
+    insight = "Ask more discovery questions."
+else:
+    insight = "Balanced call, maintain similar approach."
+
+# -------------------------------
+# RESULTS
+# -------------------------------
+print("\n--- Call Quality Report ---")
+print("Talk-time ratio:", talk_ratio)
+print("Questions asked:", questions)
+print("Longest monologue (sec):", longest_monologue)
+print("Call Sentiment:", sentiment)
+print("Actionable Insight:", insight)
